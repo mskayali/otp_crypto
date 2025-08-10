@@ -2,10 +2,10 @@
 /// -------------------------------------------
 /// Represents the protocol wire format used over (or alongside) HTTP:
 ///   Headers (as key-value strings):
-///     "v": 1                    // protocol version
-///     "w": <int>                // time window (floor(epoch/30))
-///     "n": "<b64_nonce>"        // 8-byte random nonce (Base64)
-///     "c": "<b64_ciphertext>"   // AES-256-CBC ciphertext (Base64)
+///     "version": 1                    // protocol version
+///     "window": <int>                // time window (floor(epoch/30))
+///     "nonce": "<b64_nonce>"        // 8-byte random nonce (Base64)
+///     "ciphertext": "<b64_ciphertext>"   // AES-256-CBC ciphertext (Base64)
 ///   Body (as string):
 ///     "<b64_tag>"               // HMAC-SHA256 tag (Base64)
 ///
@@ -17,13 +17,14 @@
 /// SECURITY NOTES:
 /// - This type **does not** verify MACs nor decrypt. It only parses/holds data.
 /// - Validation here is strictly for format (presence, base64, lengths).
-/// - Keep field names exactly "v","w","n","c" to match the protocol.
+/// - Keep field names exactly "version","window","nonce","ciphertext" to match the protocol.
 ///
 /// HINTS:
 /// - Use with `Encryptor` (to build a SecureMessage) and `Decryptor` (to parse).
 /// - Headers are returned as `Map<String,String>` ready to be attached to an
 ///   HTTP request by a higher-level client (this library does not send HTTP).
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import '../otp_crypto/errors.dart';
@@ -31,16 +32,16 @@ import '../otp_crypto/rand_nonce.dart';
 import '../otp_crypto/utils.dart';
 
 class SecureMessage {
-  /// Protocol version (`v`). Currently 1.
-  final int v;
+  /// Protocol version (`version`). Currently 1.
+  final int version;
 
-  /// Time window (`w`): floor(epoch / windowSeconds).
-  final int w;
+  /// Time window (`window`): floor(epoch / windowSeconds).
+  final int window;
 
-  /// Nonce (`n`) as raw 8 bytes.
+  /// Nonce (`nonce`) as raw 8 bytes.
   final Uint8List nonce;
 
-  /// Ciphertext (`c`) as raw bytes.
+  /// Ciphertext (`ciphertext`) as raw bytes.
   final Uint8List ciphertext;
 
   /// Tag (body) as raw 32 bytes (HMAC-SHA256).
@@ -50,35 +51,45 @@ class SecureMessage {
   ///
   /// HINT: Prefer `fromParts` to enforce basic length checks at creation time.
   SecureMessage._internal({
-    required this.v,
-    required this.w,
+    required this.version,
+    required this.window,
     required this.nonce,
     required this.ciphertext,
     required this.tag,
   });
 
+  Map<String,dynamic> toJson() {
+    return {
+      'version': version,
+      'window': window,
+      'nonce': base64.encode(nonce),
+      'ciphertext': base64.encode(ciphertext),
+      'tag': base64.encode(tag),
+    };
+  }
+
   /// Builds a `SecureMessage` from *raw* components.
   ///
-  /// [v] protocol version (must be >=1).
-  /// [w] time window (non-negative).
+  /// [version] protocol version (must be >=1).
+  /// [window] time window (non-negative).
   /// [nonce] 8-byte random nonce (validated).
   /// [ciphertext] AES-256-CBC ciphertext bytes.
   /// [tag] 32-byte HMAC-SHA256 tag.
   ///
   /// Throws [InvalidMessageException] if any precondition fails.
   static SecureMessage fromParts({
-    required int v,
-    required int w,
+    required int version,
+    required int window,
     required Uint8List nonce,
     required Uint8List ciphertext,
     required Uint8List tag,
   }) {
     try {
-      if (v < 1) {
-        throw ArgumentError.value(v, 'v', 'Protocol version must be >= 1.');
+      if (version < 1) {
+        throw ArgumentError.value(version, 'v', 'Protocol version must be >= 1.');
       }
-      if (w < 0) {
-        throw ArgumentError.value(w, 'w', 'Window must be non-negative.');
+      if (window < 0) {
+        throw ArgumentError.value(window, 'w', 'Window must be non-negative.');
       }
       NonceGenerator.validate(nonce);
       if (ciphertext.isEmpty) {
@@ -90,8 +101,8 @@ class SecureMessage {
 
       // Store defensive copies to maintain immutability guarantees.
       return SecureMessage._internal(
-        v: v,
-        w: w,
+        version: version,
+        window: window,
         nonce: Uint8List.fromList(nonce),
         ciphertext: Uint8List.fromList(ciphertext),
         tag: Uint8List.fromList(tag),
@@ -103,7 +114,7 @@ class SecureMessage {
 
   /// Parses a `SecureMessage` from **wire** headers/body.
   ///
-  /// [headers] must contain keys: "v","w","n","c" (all strings).
+  /// [headers] must contain keys: "version","window","nonce","ciphertext" (all strings).
   /// [body]    must be the Base64-encoded tag string.
   ///
   /// Throws [InvalidMessageException] on missing fields, bad integers/base64,
@@ -116,28 +127,28 @@ class SecureMessage {
   }) {
     try {
       // -- Required header fields -------------------------------------------
-      final vStr = headers['v'];
-      final wStr = headers['w'];
-      final nStr = headers['n'];
-      final cStr = headers['c'];
+      final versionStr = headers['version'];
+      final windowStr = headers['window'];
+      final nonceStr = headers['nonce'];
+      final ciphertextStr = headers['ciphertext'];
 
-      if (vStr == null || wStr == null || nStr == null || cStr == null) {
+      if (versionStr == null || windowStr == null || nonceStr == null || ciphertextStr == null) {
         throw ArgumentError('missing required headers v/w/n/c');
       }
 
-      // Parse integers (v,w). Reject non-integers / negatives.
-      final v = int.parse(vStr);
-      final w = int.parse(wStr);
-      if (v < 1) {
-        throw ArgumentError.value(v, 'v', 'Protocol version must be >= 1.');
+      // Parse integers (version, window). Reject non-integers / negatives.
+      final version = int.parse(versionStr);
+      final window = int.parse(windowStr);
+      if (version < 1) {
+        throw ArgumentError.value(version, 'version', 'Protocol version must be >= 1.');
       }
-      if (w < 0) {
-        throw ArgumentError.value(w, 'w', 'Window must be non-negative.');
+      if (window < 0) {
+        throw ArgumentError.value(window, 'window', 'Window must be non-negative.');
       }
 
       // Decode Base64 fields.
-      final nonce = Bytes.fromBase64Strict(nStr);
-      final ciphertext = Bytes.fromBase64Strict(cStr);
+      final nonce = Bytes.fromBase64Strict(nonceStr);
+      final ciphertext = Bytes.fromBase64Strict(ciphertextStr);
       final tag = Bytes.fromBase64Strict(body);
 
       // Enforce lengths.
@@ -150,8 +161,8 @@ class SecureMessage {
       }
 
       return SecureMessage._internal(
-        v: v,
-        w: w,
+        version: version,
+        window: window,
         nonce: nonce,
         ciphertext: ciphertext,
         tag: tag,
@@ -163,15 +174,15 @@ class SecureMessage {
 
   /// Serializes this message to **wire headers** map using Base64 for binary fields.
   ///
-  /// RETURNS: `{"v": "$v", "w": "$w", "n": "<b64>", "c": "<b64>"}`
+  /// RETURNS: `{"version": "$version", "window": "$window", "nonce": "<b64>", "ciphertext": "<b64>"}`
   ///
   /// HINT: Attach this map as HTTP headers at the call site; this library does not send HTTP.
   Map<String, String> toWireHeaders() {
     return {
-      'v': v.toString(),
-      'w': w.toString(),
-      'n': Bytes.toBase64(nonce),
-      'c': Bytes.toBase64(ciphertext),
+      'version': version.toString(),
+      'window': window.toString(),
+      'nonce': Bytes.toBase64(nonce),
+      'ciphertext': Bytes.toBase64(ciphertext),
     };
   }
 
@@ -186,8 +197,8 @@ class SecureMessage {
   ///
   /// HINT: Rarely needed; supplied for completeness in tests/tools.
   SecureMessage copyWith({
-    int? v,
-    int? w,
+    int? version,
+    int? window,
     Uint8List? nonce,
     Uint8List? ciphertext,
     Uint8List? tag,
@@ -206,8 +217,8 @@ class SecureMessage {
     }
 
     return SecureMessage._internal(
-      v: v ?? this.v,
-      w: w ?? this.w,
+      version: version ?? this.version,
+      window: window ?? this.window,
       nonce: Uint8List.fromList(nextNonce),
       ciphertext: Uint8List.fromList(nextCipher),
       tag: Uint8List.fromList(nextTag),

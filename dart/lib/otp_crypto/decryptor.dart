@@ -68,23 +68,23 @@ class Decryptor {
   ///   for responses returned by the server.
   Uint8List unprotect(SecureMessage msg) {
     // 1) Protocol version check (extensible: allow only exact match for v1).
-    if (msg.v != _cfg.protocolVersion) {
+    if (msg.version != _cfg.protocolVersion) {
       throw InvalidMessageException(
         cause: ArgumentError.value(
-          msg.v,
-          'v',
+          msg.version,
+          'version',
           'Unsupported protocol version; expected ${_cfg.protocolVersion}.',
         ),
       );
     }
 
     // 2) Window skew check (reject too old/future messages quickly).
-    _enforceWindowSkew(msg.w);
+    _enforceWindowSkew(msg.window);
 
     // 3) Verify tag in constant time (Encrypt-then-MAC).
     final computedTag = TagDeriver.derive(
       macKey: _keys.macKey,
-      window: msg.w,
+      window: msg.window,
       nonce: msg.nonce,
       ciphertext: msg.ciphertext,
     );
@@ -99,7 +99,7 @@ class Decryptor {
     // 4) Derive IV and decrypt.
     final iv = IvDeriver.derive(
       macKey: _keys.macKey,
-      window: msg.w,
+      window: msg.window,
       nonce: msg.nonce,
     );
 

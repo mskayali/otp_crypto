@@ -20,9 +20,10 @@
 /// - Consider setting `verificationSkewWindows` (e.g., 1) if you need
 ///   to accept adjacent 30s windows.
 
-import 'dart:convert' show jsonEncode, jsonDecode, utf8;
+import 'dart:convert' show base64Encode, jsonEncode, utf8, jsonDecode;
 import 'dart:typed_data';
 
+import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
 import 'package:otp_crypto/http/api_client.dart';
 import 'package:otp_crypto/models/secure_message.dart';
 import 'package:otp_crypto/otp_crypto/decryptor.dart';
@@ -36,7 +37,7 @@ void main() async {
   // ---------------------------------------------------------------------------
   // NOTE: Use a cryptographically random 32+ byte key in production,
   // store it securely, and share it with the server.
-  var masterKey = Uint8List.fromList(List<int>.generate(32, (i) => i));
+  final masterKey = Uint8List.fromList(List<int>.generate(32, (i) => i));
 
   OtpCryptoConfig.initialize(
     masterKey: masterKey,
@@ -64,19 +65,22 @@ void main() async {
   // Produce SecureMessage
   SecureMessage reqMsg = enc.protect(reqPlain);
 
-  // Turn into wire parts for transport (headers map + body string)
-  var reqWire = ApiClient.toWire(
-    reqMsg,
-    extraHeaders: {
-      'X-App-Id': 'demo', // example app header; will be passed along
-    },
-  );
 
-print('''
-  --- CLIENT → WIRE (request) ---
-  Headers: ${reqWire.headers}
-  Body   : ${reqWire.body}
-''');
+final jwt = JWT(
+    {
+      'body': base64Encode(reqMsg.tag),
+      'X-App-Id': 'demo'
+    },
+    header:{
+      'version': reqMsg.version,
+      'ciphertext': base64Encode(reqMsg.ciphertext),
+      'nonce': base64Encode(reqMsg.nonce),
+      'window': reqMsg.window
+    }
+);
+
+final token = jwt.sign(SecretKey(base64Encode(masterKey)));
+  print('Signed token: $token\n');
 
   // ---------------------------------------------------------------------------
   // 2) SERVER (simulated) → parse, verify, decrypt
@@ -84,9 +88,16 @@ print('''
   // In a real app, the server would receive `reqWire.headers` and `reqWire.body`.
   // Here we parse them back to a SecureMessage and decrypt.
 
-  var parsedReq = ApiClient.parseWire(
-    headers: reqWire.headers,
-    body: reqWire.body,
+ final jwtt=JWT.decode(token);
+
+final payload = Map<String, dynamic>.from(jwtt.payload);
+final Map<String, String> headers = jwtt.header != null ? Map<String, String>.from(jwtt.header!.map((key, value) => MapEntry(key, value.toString()))) : {};
+
+print(headers);
+
+  final parsedReq = ApiClient.parseWire(
+    headers: headers,
+    body: payload['body'],
   );
 
   // Server-side decryptor (would be in PHP in real deployment).
@@ -125,7 +136,7 @@ print('''
   // ---------------------------------------------------------------------------
   // 4) CLIENT ← Parse and decrypt the response
   // ---------------------------------------------------------------------------
-  var parsedResp = ApiClient.parseWire(
+  final parsedResp = ApiClient.parseWire(
     headers: respWire.headers,
     body: respWire.body,
   );
@@ -163,7 +174,7 @@ print('''
   // var respHeaders = Map<String, String>.from(
   //   resp.headers.map.map((k, v) => MapEntry(k, v.join(','))),
   // );
-  // var replyMsg = ApiClient.parseWire(
+  // final replyMsg = ApiClient.parseWire(
   //   headers: respHeaders,
   //   body: resp.data is String ? resp.data as String : resp.data.toString(),
   // );

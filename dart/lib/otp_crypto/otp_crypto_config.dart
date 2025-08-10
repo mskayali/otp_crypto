@@ -153,7 +153,7 @@ class OtpCryptoConfig {
   /// Computes the time window for a given epoch seconds using:
   ///   window = floor(epochSeconds / windowSeconds)
   ///
-  /// HINT: Use this when building headers (`w`).
+  /// HINT: Use this when building headers (`window`).
   int windowForEpochSeconds(int epochSeconds) {
     if (epochSeconds < 0) {
       throw ArgumentError.value(epochSeconds, 'epochSeconds', 'Must be non-negative.');

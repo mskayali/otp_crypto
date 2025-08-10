@@ -26,7 +26,7 @@
 /// HINTS:
 /// - Use `ApiClient.parseWire(headers, body)` on the receiving side
 ///   to reconstruct the `SecureMessage` before verifying/decrypting.
-/// - Extra headers cannot override reserved keys: "v","w","n","c".
+/// - Extra headers cannot override reserved keys: "version","window","nonce","ciphertext".
 
 import 'package:meta/meta.dart';
 
@@ -59,14 +59,14 @@ class ApiClient {
   ApiClient._(); // static-only
 
   /// Protocol-reserved header keys (lowercase).
-  static const Set<String> _reserved = {'v', 'w', 'n', 'c'};
+  static const Set<String> _reserved = {'version', 'window', 'nonce', 'ciphertext'};
 
   /// Serializes a `SecureMessage` into wire-ready headers/body.
   ///
   /// [msg] The already-built secure message.
   /// [extraHeaders] Optional application headers to merge (e.g., auth, tracing).
   ///   - Keys are treated as case-sensitive for the caller, but we prevent
-  ///     collisions with the reserved protocol keys ("v","w","n","c")
+  ///     collisions with the reserved protocol keys ("version","window","nonce","ciphertext")
   ///     regardless of the caller's case.
   ///
   /// RETURNS: `WireRequestParts` with immutable headers map and body string.

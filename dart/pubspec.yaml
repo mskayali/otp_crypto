@@ -24,6 +24,7 @@ dev_dependencies:
   test: ^1.25.0
   dio: ^5.4.0              # used only in example/
   lints: ^3.0.0
+  dart_jsonwebtoken: ^3.1.1
 
 # Optional: nice to have for package consumers
 topics:

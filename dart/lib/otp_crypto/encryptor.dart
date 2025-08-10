@@ -2,12 +2,12 @@
 /// --------------------------------------------------------------
 /// High-level symmetric encryption orchestrator:
 ///   1) Derive {encKey, macKey} via HKDF-SHA256 from the singleton config.
-///   2) Compute current time window `w`.
-///   3) Generate 8-byte random nonce `n`.
-///   4) Derive IV = HMAC(macKey, "iv" || u64be(w) || n)[:16].
-///   5) Encrypt plaintext with AES-256-CBC + PKCS#7 using encKey+IV → `c`.
-///   6) Compute tag = HMAC(macKey, "tag" || u64be(w) || n || c).
-///   7) Produce `SecureMessage { v,w,n,c,tag }`.
+///   2) Compute current time window `window`.
+///   3) Generate 8-byte random nonce `nonce`.
+///   4) Derive IV = HMAC(macKey, "iv" || u64be(window) || nonce)[:16].
+///   5) Encrypt plaintext with AES-256-CBC + PKCS#7 using encKey+IV → `ciphertext`.
+///   6) Compute tag = HMAC(macKey, "tag" || u64be(window) || nonce || ciphertext).
+///   7) Produce `SecureMessage { version, window, nonce, ciphertext, tag }`.
 ///
 /// This class **does not** send HTTP. It only returns a `SecureMessage`.
 /// To serialize into headers/body, use `ApiClient.toWire(msg)`.
@@ -66,11 +66,11 @@ class Encryptor {
   ///
   /// OUTPUT:
   /// - `SecureMessage` with fields:
-  ///     v = config.protocolVersion
-  ///     w = floor(epochSeconds / windowSeconds)
-  ///     n = 8B nonce
-  ///     c = AES-256-CBC ciphertext
-  ///     tag = HMAC-SHA256 over ("tag" || u64be(w) || n || c)
+  ///     version = config.protocolVersion
+  ///     window = floor(epochSeconds / windowSeconds)
+  ///     nonce = 8B nonce
+  ///     ciphertext = AES-256-CBC ciphertext
+  ///     tag = HMAC-SHA256 over ("tag" || u64be(window) || nonce || ciphertext)
   ///
   /// Throws:
   /// - [InvalidMessageException] if inputs are malformed.
@@ -86,15 +86,15 @@ class Encryptor {
 
     try {
       // 1) Current window
-      final int w = _cfg.currentWindow();
+      final int window = _cfg.currentWindow();
 
       // 2) Fresh nonce (8 bytes)
       final nonce = _nonceGen.nextNonce();
 
-      // 3) IV from macKey + ("iv"||u64be(w)||nonce)
+      // 3) IV from macKey + ("iv"||u64be(window)||nonce)
       final iv = IvDeriver.derive(
         macKey: _keys.macKey,
-        window: w,
+        window: window,
         nonce: nonce,
       );
 
@@ -108,15 +108,15 @@ class Encryptor {
       // 5) Tag from macKey + ("tag"||u64be(w)||nonce||ciphertext)
       final tag = TagDeriver.derive(
         macKey: _keys.macKey,
-        window: w,
+        window: window,
         nonce: nonce,
         ciphertext: ciphertext,
       );
 
       // 6) Build message
       final msg = SecureMessage.fromParts(
-        v: _cfg.protocolVersion,
-        w: w,
+        version: _cfg.protocolVersion,
+        window: window,
         nonce: nonce,
         ciphertext: ciphertext,
         tag: tag,
