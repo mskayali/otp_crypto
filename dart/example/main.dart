@@ -24,6 +24,7 @@ import 'dart:convert' show jsonEncode, jsonDecode, utf8;
 import 'dart:typed_data';
 
 import 'package:otp_crypto/http/api_client.dart';
+import 'package:otp_crypto/models/secure_message.dart';
 import 'package:otp_crypto/otp_crypto/decryptor.dart';
 import 'package:otp_crypto/otp_crypto/encryptor.dart';
 import 'package:otp_crypto/otp_crypto/otp_crypto_config.dart';
@@ -35,7 +36,7 @@ void main() async {
   // ---------------------------------------------------------------------------
   // NOTE: Use a cryptographically random 32+ byte key in production,
   // store it securely, and share it with the server.
-  final masterKey = Uint8List.fromList(List<int>.generate(32, (i) => i));
+  var masterKey = Uint8List.fromList(List<int>.generate(32, (i) => i));
 
   OtpCryptoConfig.initialize(
     masterKey: masterKey,
@@ -48,33 +49,34 @@ void main() async {
   );
 
   // Client-side helpers
-  final enc = Encryptor();
-  final dec = Decryptor();
+  var enc = Encryptor();
+  var dec = Decryptor();
 
   // ---------------------------------------------------------------------------
   // 1) CLIENT → Build encrypted request (headers/body)
   // ---------------------------------------------------------------------------
-  final reqJson = <String, dynamic>{
+  var reqJson = <String, dynamic>{
     'q': 'ping',
     'ts': DateTime.now().toUtc().toIso8601String(),
   };
-  final reqPlain = Uint8List.fromList(utf8.encode(jsonEncode(reqJson)));
+  var reqPlain = Uint8List.fromList(utf8.encode(jsonEncode(reqJson)));
 
   // Produce SecureMessage
-  final reqMsg = enc.protect(reqPlain);
+  SecureMessage reqMsg = enc.protect(reqPlain);
 
   // Turn into wire parts for transport (headers map + body string)
-  final reqWire = ApiClient.toWire(
+  var reqWire = ApiClient.toWire(
     reqMsg,
     extraHeaders: {
       'X-App-Id': 'demo', // example app header; will be passed along
     },
   );
 
-  print('--- CLIENT → WIRE (request) ---');
-  print('Headers: ${reqWire.headers}');
-  print('Body   : ${reqWire.body}');
-  print('');
+print('''
+  --- CLIENT → WIRE (request) ---
+  Headers: ${reqWire.headers}
+  Body   : ${reqWire.body}
+''');
 
   // ---------------------------------------------------------------------------
   // 2) SERVER (simulated) → parse, verify, decrypt
@@ -82,51 +84,53 @@ void main() async {
   // In a real app, the server would receive `reqWire.headers` and `reqWire.body`.
   // Here we parse them back to a SecureMessage and decrypt.
 
-  final parsedReq = ApiClient.parseWire(
+  var parsedReq = ApiClient.parseWire(
     headers: reqWire.headers,
     body: reqWire.body,
   );
 
   // Server-side decryptor (would be in PHP in real deployment).
-  final serverDec = dec; // using same instance just for demo
-  final serverReqPlain = serverDec.unprotect(parsedReq);
+  var serverDec = dec; // using same instance just for demo
+  var serverReqPlain = serverDec.unprotect(parsedReq);
 
-  final serverReqJson = jsonDecode(utf8.decode(serverReqPlain)) as Map<String, dynamic>;
+  var serverReqJson = jsonDecode(utf8.decode(serverReqPlain)) as Map<String, dynamic>;
 
-  print('--- SERVER → Parsed plaintext (request) ---');
-  print(serverReqJson);
-  print('');
+print('''
+  --- SERVER → Parsed plaintext (request) ---
+  $serverReqJson
+''');
 
   // ---------------------------------------------------------------------------
   // 3) SERVER → Build encrypted response (headers/body)
   // ---------------------------------------------------------------------------
-  final respJson = <String, dynamic>{
+  var respJson = <String, dynamic>{
     'ok': true,
     'echo': serverReqJson,
   };
-  final respPlain = Uint8List.fromList(utf8.encode(jsonEncode(respJson)));
+  var respPlain = Uint8List.fromList(utf8.encode(jsonEncode(respJson)));
 
   // Server encryptor (would run in PHP)
-  final serverEnc = enc; // using same instance for demo symmetry
-  final respMsg = serverEnc.protect(respPlain);
-  final respWire = ApiClient.toWire(respMsg, extraHeaders: {
+  var serverEnc = enc; // using same instance for demo symmetry
+  var respMsg = serverEnc.protect(respPlain);
+  var respWire = ApiClient.toWire(respMsg, extraHeaders: {
     'X-Server': 'demo',
   });
 
-  print('--- SERVER → WIRE (response) ---');
-  print('Headers: ${respWire.headers}');
-  print('Body   : ${respWire.body}');
-  print('');
+print('''
+  --- SERVER → WIRE (response) ---
+  Headers: ${respWire.headers}
+  Body   : ${respWire.body}
+''');
 
   // ---------------------------------------------------------------------------
   // 4) CLIENT ← Parse and decrypt the response
   // ---------------------------------------------------------------------------
-  final parsedResp = ApiClient.parseWire(
+  var parsedResp = ApiClient.parseWire(
     headers: respWire.headers,
     body: respWire.body,
   );
-  final respPlainClient = dec.unprotect(parsedResp);
-  final respJsonClient = jsonDecode(utf8.decode(respPlainClient)) as Map<String, dynamic>;
+  var respPlainClient = dec.unprotect(parsedResp);
+  var respJsonClient = jsonDecode(utf8.decode(respPlainClient)) as Map<String, dynamic>;
 
 print('''
   --- CLIENT ← Parsed plaintext (response) ---
@@ -142,27 +146,27 @@ print('''
   //
   // import 'package:dio/dio.dart';
   //
-  // final dio = Dio(BaseOptions(baseUrl: 'https://api.example.com'));
+  // var dio = Dio(BaseOptions(baseUrl: 'https://api.example.com'));
   //
   // // 1) Build request as above:
-  // final msg = enc.protect(Uint8List.fromList(utf8.encode('{"q":"ping"}')));
-  // final wire = ApiClient.toWire(msg, extraHeaders: {'X-App-Id': 'demo'});
+  // var msg = enc.protect(Uint8List.fromList(utf8.encode('{"q":"ping"}')));
+  // var wire = ApiClient.toWire(msg, extraHeaders: {'X-App-Id': 'demo'});
   //
   // // 2) Send with wire parts:
-  // final resp = await dio.post(
+  // var resp = await dio.post(
   //   '/secure-endpoint',
   //   options: Options(headers: wire.headers),
   //   data: wire.body, // Base64 string
   // );
   //
   // // 3) Parse + decrypt response:
-  // final respHeaders = Map<String, String>.from(
+  // var respHeaders = Map<String, String>.from(
   //   resp.headers.map.map((k, v) => MapEntry(k, v.join(','))),
   // );
-  // final replyMsg = ApiClient.parseWire(
+  // var replyMsg = ApiClient.parseWire(
   //   headers: respHeaders,
   //   body: resp.data is String ? resp.data as String : resp.data.toString(),
   // );
-  // final replyPlain = dec.unprotect(replyMsg);
+  // var replyPlain = dec.unprotect(replyMsg);
   // print(utf8.decode(replyPlain));
 }

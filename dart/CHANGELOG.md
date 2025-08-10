@@ -33,3 +33,11 @@ The format is based on **Keep a Changelog**, and this project adheres to **Seman
 
 [Unreleased]: https://example.com/compare/0.1.0...HEAD
 [0.1.0]: https://example.com/releases/0.1.0
+## [0.1.1] - 2025-08-10
+
+### Updated
+- **Yaml repository link updated**
+- ## [0.1.2] - 2025-08-10
+
+### Updated
+- **example/main.dart**
