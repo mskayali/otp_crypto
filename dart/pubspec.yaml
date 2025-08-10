@@ -5,7 +5,7 @@ description: >
   wire model for headers/body only (no HTTP). Interops with a PHP server.
 
 version: 0.1.0
-repository: https://github.com/mskayali/otp_crypto/dart
+repository: https://github.com/mskayali/otp_crypto/tree/main/dart
 homepage: https://github.com/mskayali/otp_crypto
 
 environment:

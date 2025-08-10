@@ -1,6 +1,6 @@
 {
     "name": "mskayali/otp-crypto",
-    "homepage": "https://github.com/mskayali/otp_crypto/php",
+    "homepage": "https://github.com/mskayali/otp_crypto/tree/main/php",
     "description": "Time-windowed IV (OTP-like) AES-256-CBC + HMAC-SHA256 with HKDF-SHA256 for PHP, interoperable with the Dart client.",
     "type": "library",
     "license": "MIT",
