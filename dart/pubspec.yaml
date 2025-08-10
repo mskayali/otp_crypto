@@ -1,0 +1,34 @@
+name: otp_crypto
+description: >
+  Time-windowed IV (OTP-like) symmetric crypto for Dart.
+  AES-256-CBC + HMAC-SHA256 (Encrypt-then-MAC), HKDF-SHA256 key derivation,
+  wire model for headers/body only (no HTTP). Interops with a PHP server.
+
+version: 0.1.0
+repository: https://github.com/mskayali/otp_crypto/dart
+homepage: https://github.com/mskayali/otp_crypto
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+# Library dependencies (used by code under lib/)
+dependencies:
+  crypto: ^3.0.3           # SHA-256 digest
+  encrypt: ^5.0.1          # AES-256-CBC + PKCS#7
+  meta: ^1.11.0            # @immutable, etc.
+
+# Dev-only deps for tests and the example app.
+# NOTE: The library itself does NOT perform HTTP; if you run the example
+# and want to send a request, we use Dio there per your preference.
+dev_dependencies:
+  test: ^1.25.0
+  dio: ^5.4.0              # used only in example/
+  lints: ^3.0.0
+
+# Optional: nice to have for package consumers
+topics:
+  - aes
+  - hmac
+  - hkdf
+  - security
+  - crypto
