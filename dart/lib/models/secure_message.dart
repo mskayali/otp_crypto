@@ -86,10 +86,10 @@ class SecureMessage {
   }) {
     try {
       if (version < 1) {
-        throw ArgumentError.value(version, 'v', 'Protocol version must be >= 1.');
+        throw ArgumentError.value(version, 'version', 'Protocol version must be >= 1.');
       }
       if (window < 0) {
-        throw ArgumentError.value(window, 'w', 'Window must be non-negative.');
+        throw ArgumentError.value(window, 'window', 'Window must be non-negative.');
       }
       NonceGenerator.validate(nonce);
       if (ciphertext.isEmpty) {

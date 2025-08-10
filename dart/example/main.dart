@@ -1,26 +1,30 @@
-/// Example – End-to-end roundtrip (no HTTP) + optional Dio snippet
-/// ---------------------------------------------------------------
-/// This example shows how to:
-/// 1) Initialize the global crypto config (singleton).
-/// 2) Encrypt a plaintext into a SecureMessage (headers+body).
-/// 3) Serialize to wire parts (headers map + body string).
-/// 4) Simulate a server that parses/verifies/decrypts the message,
-///    then encrypts a response using the same protocol.
-/// 5) Parse and decrypt the response on the client.
+/// JWT-wrapped wire demo (headers in JWT header, tag in payload)
+/// -------------------------------------------------------------
+/// This shows how you can **package the protocol’s wire pieces inside a JWT**
+/// for transport. This is app-level sugar; the crypto library itself **does not**
+/// build HTTP or JWTs. We still follow the exact wire schema:
+///   - headers: v, w, n, c
+///   - body   : <b64_tag>
 ///
-/// IMPORTANT:
-/// - The library itself does NOT perform HTTP. We only operate on
-///   headers/body content. A commented Dio snippet is included to
-///   illustrate how to attach these parts to a real request.
+/// In this example we:
+///  0) Initialize the global crypto config (singleton).
+///  1) Client encrypts a request → SecureMessage {v,w,n,c,tag}.
+///  2) Embed protocol headers into the **JWT header**, and the tag into the **JWT payload**.
+///  3) “Server” decodes the JWT, reconstructs SecureMessage, verifies+decrypts.
+///  4) Server encrypts a response and we decrypt it on the client.
 ///
-/// HINTS:
-/// - Replace the example `masterKey` with a secure, 32+ byte secret
-///   shared between client and server.
-/// - Ensure system clocks are reasonably synchronized (NTP).
-/// - Consider setting `verificationSkewWindows` (e.g., 1) if you need
-///   to accept adjacent 30s windows.
+/// REQUIREMENTS:
+/// - Add `dart_jsonwebtoken` to your dev dependencies (used only by this demo):
+///     dev_dependencies:
+///       dart_jsonwebtoken: ^2.13.0
+///
+/// SECURITY NOTES:
+/// - JWT here is **only a transport container**. It does NOT replace the protocol
+///   MAC (HMAC-SHA256) which authenticates the ciphertext (Encrypt-then-MAC).
+/// - If you sign the JWT, verify it on receipt (`JWT.verify`) before using fields.
+/// - Keep the protocol header keys **exactly** "v","w","n","c" for interop.
 
-import 'dart:convert' show base64Encode, jsonEncode, utf8, jsonDecode;
+import 'dart:convert' show base64Encode, jsonDecode, jsonEncode, utf8;
 import 'dart:typed_data';
 
 import 'package:dart_jsonwebtoken/dart_jsonwebtoken.dart';
@@ -35,149 +39,129 @@ void main() async {
   // ---------------------------------------------------------------------------
   // 0) Global configuration (singleton)
   // ---------------------------------------------------------------------------
-  // NOTE: Use a cryptographically random 32+ byte key in production,
-  // store it securely, and share it with the server.
+  // NOTE: In production, use a cryptographically random 32+ byte key,
+  // store it securely (e.g., KeyStore/KeyChain/Env+KMS), and share it with the server.
   final masterKey = Uint8List.fromList(List<int>.generate(32, (i) => i));
 
   OtpCryptoConfig.initialize(
     masterKey: masterKey,
-    salt: null, // optional; recommended to set as protocol constant
-    info: utf8.encode('otp-v1') as Uint8List?, // optional; binds keys to this protocol
+    salt: null, // Optional; recommended to set as a protocol-wide constant
+    info: utf8.encode('otp-v1') as Uint8List?, // Optional; binds keys to this protocol
     protocolVersion: 1,
     windowSeconds: 30,
-    verificationSkewWindows: 0, // set to 1 if you want to accept [w-1,w,w+1]
+    verificationSkewWindows: 0, // Set to 1 if you want to accept [w-1, w, w+1]
     timeProvider: SystemTimeProvider(),
   );
 
-  // Client-side helpers
-  var enc = Encryptor();
-  var dec = Decryptor();
+  // High-level helpers (stateless per-request)
+  final enc = Encryptor();
+  final dec = Decryptor();
 
   // ---------------------------------------------------------------------------
-  // 1) CLIENT → Build encrypted request (headers/body)
+  // 1) CLIENT → Build encrypted request (SecureMessage)
   // ---------------------------------------------------------------------------
-  var reqJson = <String, dynamic>{
+  // Prepare some JSON payload to protect.
+  final reqJson = <String, dynamic>{
     'q': 'ping',
     'ts': DateTime.now().toUtc().toIso8601String(),
   };
-  var reqPlain = Uint8List.fromList(utf8.encode(jsonEncode(reqJson)));
+  final reqPlain = Uint8List.fromList(utf8.encode(jsonEncode(reqJson)));
 
-  // Produce SecureMessage
-  SecureMessage reqMsg = enc.protect(reqPlain);
+  // Produce SecureMessage with fields v,w,nonce,ciphertext,tag
+  final SecureMessage reqMsg = enc.protect(reqPlain);
 
-
-final jwt = JWT(
+  // ---------------------------------------------------------------------------
+  // Wrap into a JWT for transport (optional, application-level)
+  // ---------------------------------------------------------------------------
+  // PROTOCOL MAPPING INSIDE JWT:
+  //   - JWT header carries *protocol headers* using the exact reserved keys:
+  //       v, w, n, c
+  //   - JWT payload carries the *body* (Base64-encoded tag) plus any app claims.
+  //
+  // This keeps our core protocol intact while letting you use JWT tooling.
+  final jwt = JWT(
+    // Payload (body): put Base64 tag under "body" + any app-level claims.
     {
       'body': base64Encode(reqMsg.tag),
-      'X-App-Id': 'demo'
+      'X-App-Id': 'demo', // example custom claim
     },
-    header:{
-      'version': reqMsg.version,
-      'ciphertext': base64Encode(reqMsg.ciphertext),
-      'nonce': base64Encode(reqMsg.nonce),
-      'window': reqMsg.window
-    }
-);
-
-final token = jwt.sign(SecretKey(base64Encode(masterKey)));
-  print('Signed token: $token\n');
-
-  // ---------------------------------------------------------------------------
-  // 2) SERVER (simulated) → parse, verify, decrypt
-  // ---------------------------------------------------------------------------
-  // In a real app, the server would receive `reqWire.headers` and `reqWire.body`.
-  // Here we parse them back to a SecureMessage and decrypt.
-
- final jwtt=JWT.decode(token);
-
-final payload = Map<String, dynamic>.from(jwtt.payload);
-final Map<String, String> headers = jwtt.header != null ? Map<String, String>.from(jwtt.header!.map((key, value) => MapEntry(key, value.toString()))) : {};
-
-print(headers);
-
-  final parsedReq = ApiClient.parseWire(
-    headers: headers,
-    body: payload['body'],
+    // Header: MUST use protocol keys exactly as on the wire.
+    header: {
+      'v': reqMsg.version, // protocol version (number is okay; we'll stringify later)
+      'w': reqMsg.window, // time window (number)
+      'n': base64Encode(reqMsg.nonce), // Base64 nonce (8 bytes)
+      'c': base64Encode(reqMsg.ciphertext), // Base64 ciphertext
+      // JWT will also inject std fields like 'alg','typ' automatically.
+    },
   );
 
-  // Server-side decryptor (would be in PHP in real deployment).
-  var serverDec = dec; // using same instance just for demo
-  var serverReqPlain = serverDec.unprotect(parsedReq);
-
-  var serverReqJson = jsonDecode(utf8.decode(serverReqPlain)) as Map<String, dynamic>;
-
-print('''
-  --- SERVER → Parsed plaintext (request) ---
-  $serverReqJson
-''');
+  // Sign JWT (HS256 by default) with a key known to both client & server.
+  // NOTE: This is separate from the protocol HMAC (which authenticates ciphertext).
+  final token = jwt.sign(SecretKey(base64Encode(masterKey)));
+  print('--- CLIENT → Signed JWT token ---\n$token\n');
 
   // ---------------------------------------------------------------------------
-  // 3) SERVER → Build encrypted response (headers/body)
+  // 2) SERVER (simulated) → decode JWT, parse SecureMessage, verify+decrypt
   // ---------------------------------------------------------------------------
-  var respJson = <String, dynamic>{
+  // In production, receive `token` via your transport. Always **verify**:
+  final decoded = JWT.verify(token, SecretKey(base64Encode(masterKey)));
+
+  // Extract payload (body/tag) and header (protocol fields).
+  final payload = Map<String, dynamic>.from(decoded.payload);
+  final hdrDyn = Map<String, dynamic>.from(decoded.header ?? const {});
+
+  // Build the exact wire headers map required by our protocol parser.
+  // Convert numbers to strings (as they would appear in real HTTP headers).
+  final headers = <String, String>{
+    'version': hdrDyn['v'].toString(),
+    'window': hdrDyn['w'].toString(),
+    'nonce': hdrDyn['n'].toString(),
+    'ciphertext': hdrDyn['c'].toString(),
+  };
+
+  // The body string is the Base64-encoded tag from the payload.
+  final bodyB64 = payload['body'] as String;
+
+  // Parse back to a SecureMessage (format validation only).
+  final parsedReq = ApiClient.parseWire(headers: headers, body: bodyB64);
+
+  // On the server, verify tag and decrypt.
+  final serverDec = dec; // same instance for demo; would be separate in real app
+  final serverReqPlain = serverDec.unprotect(parsedReq);
+
+  final serverReqJson = jsonDecode(utf8.decode(serverReqPlain)) as Map<String, dynamic>;
+
+  print('--- SERVER → Parsed plaintext (request) ---\n$serverReqJson\n');
+
+  // ---------------------------------------------------------------------------
+  // 3) SERVER → Build encrypted response (then client will decrypt)
+  // ---------------------------------------------------------------------------
+  final respJson = <String, dynamic>{
     'ok': true,
     'echo': serverReqJson,
   };
-  var respPlain = Uint8List.fromList(utf8.encode(jsonEncode(respJson)));
+  final respPlain = Uint8List.fromList(utf8.encode(jsonEncode(respJson)));
 
-  // Server encryptor (would run in PHP)
-  var serverEnc = enc; // using same instance for demo symmetry
-  var respMsg = serverEnc.protect(respPlain);
-  var respWire = ApiClient.toWire(respMsg, extraHeaders: {
+  // Encrypt response (same protocol)
+  final serverEnc = enc; // same instance for demo symmetry
+  final respMsg = serverEnc.protect(respPlain);
+
+  // Turn into wire parts (headers/body). You could also wrap into a JWT again.
+  final respWire = ApiClient.toWire(respMsg, extraHeaders: {
     'X-Server': 'demo',
   });
 
-print('''
-  --- SERVER → WIRE (response) ---
-  Headers: ${respWire.headers}
-  Body   : ${respWire.body}
-''');
+  print('--- SERVER → WIRE (response) ---\n'
+      'Headers: ${respWire.headers}\n'
+      'Body   : ${respWire.body}\n');
 
   // ---------------------------------------------------------------------------
   // 4) CLIENT ← Parse and decrypt the response
   // ---------------------------------------------------------------------------
-  final parsedResp = ApiClient.parseWire(
-    headers: respWire.headers,
-    body: respWire.body,
-  );
-  var respPlainClient = dec.unprotect(parsedResp);
-  var respJsonClient = jsonDecode(utf8.decode(respPlainClient)) as Map<String, dynamic>;
+  final parsedResp = ApiClient.parseWire(headers: respWire.headers, body: respWire.body);
 
-print('''
-  --- CLIENT ← Parsed plaintext (response) ---
-  $respJsonClient
-''');
+  final respPlainClient = dec.unprotect(parsedResp);
+  final respJsonClient = jsonDecode(utf8.decode(respPlainClient)) as Map<String, dynamic>;
 
-  // ---------------------------------------------------------------------------
-  // OPTIONAL: Real HTTP request using Dio (application-level)
-  // ---------------------------------------------------------------------------
-  // IMPORTANT:
-  // - This library does NOT send HTTP. The snippet below is a suggestion
-  //   for how to glue the wire parts to a Dio call in a real app.
-  //
-  // import 'package:dio/dio.dart';
-  //
-  // var dio = Dio(BaseOptions(baseUrl: 'https://api.example.com'));
-  //
-  // // 1) Build request as above:
-  // var msg = enc.protect(Uint8List.fromList(utf8.encode('{"q":"ping"}')));
-  // var wire = ApiClient.toWire(msg, extraHeaders: {'X-App-Id': 'demo'});
-  //
-  // // 2) Send with wire parts:
-  // var resp = await dio.post(
-  //   '/secure-endpoint',
-  //   options: Options(headers: wire.headers),
-  //   data: wire.body, // Base64 string
-  // );
-  //
-  // // 3) Parse + decrypt response:
-  // var respHeaders = Map<String, String>.from(
-  //   resp.headers.map.map((k, v) => MapEntry(k, v.join(','))),
-  // );
-  // final replyMsg = ApiClient.parseWire(
-  //   headers: respHeaders,
-  //   body: resp.data is String ? resp.data as String : resp.data.toString(),
-  // );
-  // var replyPlain = dec.unprotect(replyMsg);
-  // print(utf8.decode(replyPlain));
+  print('--- CLIENT ← Parsed plaintext (response) ---\n$respJsonClient\n');
 }

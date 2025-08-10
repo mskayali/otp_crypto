@@ -1,4 +1,3 @@
-
 # otp_crypto (Dart)
 
 A symmetric crypto layer that uses **AES-256-CBC + HMAC-SHA256 (Encrypt-then-MAC)** with a **time-windowed IV (OTP-like)** and derives keys via **HKDF-SHA256**.  
@@ -11,7 +10,7 @@ This library **does not create HTTP requests**; it operates only on **header/bod
 > - Keys are derived by HKDF-SHA256: `enc_key` (32B) + `mac_key` (32B).  
 > - Time window: `window = floor(epochSeconds / 30)` (default 30s).  
 > - Wire format:  
->   - Headers: `{ "v":1, "w":<int>, "n":"<b64_nonce>", "c":"<b64_ciphertext>" }`  
+>   - Headers: `{ "version":1, "window":<int>, "nonce":"<b64_nonce>", "ciphertext":"<b64_ciphertext>" }`  
 >   - Body: `"<b64_tag>"`
 
 ---
@@ -82,9 +81,9 @@ lib/
 
 ## Protocol Details
 
-* **Version (`v`)**: `1`
-* **Time window (`w`)**: `floor(epochSeconds / 30)` (default `30`)
-* **Nonce (`n`)**: 8 bytes, CSPRNG
+* **Version (`version`)**: `1`
+* **Time window (`window`)**: `floor(epochSeconds / 30)` (default `30`)
+* **Nonce (`Nonce`)**: 8 bytes, CSPRNG
 * **HKDF-SHA256**:
 
   * PRK = HMAC(salt, masterKey)
@@ -98,10 +97,10 @@ lib/
 
     ```json
     {
-      "v": 1,
-      "w": <int>,
-      "n": "<b64_nonce>",
-      "c": "<b64_ciphertext>"
+      "version": 1,
+      "window": <int>,
+      "nonce": "<b64_nonce>",
+      "ciphertext": "<b64_ciphertext>"
     }
     ```
   * Body: `"<b64_tag>"`
@@ -166,7 +165,7 @@ import 'package:otp_crypto/http/api_client.dart';
 
 // Sender side:
 final wire = ApiClient.toWire(msg, extraHeaders: {'X-App-Id': 'myapp'});
-// wire.headers -> {"v","w","n","c",...}, wire.body -> "<b64_tag>"
+// wire.headers -> {"version","window","nonce","ciphertext",...}, wire.body -> "<b64_tag>"
 
 // Receiver side:
 final parsed = ApiClient.parseWire(headers: wire.headers, body: wire.body);
