@@ -4,7 +4,7 @@ description: >
   AES-256-CBC + HMAC-SHA256 (Encrypt-then-MAC), HKDF-SHA256 key derivation,
   wire model for headers/body only (no HTTP). Interops with a PHP server.
 
-version: 0.1.2
+version: 0.1.3
 repository: https://github.com/mskayali/otp_crypto/tree/main/dart
 homepage: https://github.com/mskayali/otp_crypto
 

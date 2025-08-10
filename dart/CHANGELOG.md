@@ -37,7 +37,14 @@ The format is based on **Keep a Changelog**, and this project adheres to **Seman
 
 ### Updated
 - **Yaml repository link updated**
-- ## [0.1.2] - 2025-08-10
+## [0.1.2] - 2025-08-10
 
 ### Updated
 - **example/main.dart**
+  
+
+## [0.1.3] - 2025-08-10
+
+### Updated
+- **example/main.dart Example encapsulation changed with jwt**
+- **version, window, tag, etc.. Attributes changed**
