@@ -8,6 +8,7 @@
       "version": "0.1.3",
       "dependencies": [
         "crypto",
+        "cryptography",
         "encrypt",
         "meta"
       ],
@@ -541,6 +542,22 @@
         "meta",
         "path"
       ]
+    },
+    {
+      "name": "cryptography",
+      "version": "2.9.0",
+      "dependencies": [
+        "collection",
+        "crypto",
+        "ffi",
+        "meta",
+        "typed_data"
+      ]
+    },
+    {
+      "name": "ffi",
+      "version": "2.1.4",
+      "dependencies": []
     }
   ],
   "configVersion": 1

@@ -1,251 +1,250 @@
-# otp_crypto (Dart)
 
-A symmetric crypto layer that uses **AES-256-CBC + HMAC-SHA256 (Encrypt-then-MAC)** with a **time-windowed IV (OTP-like)** and derives keys via **HKDF-SHA256**.  
-This library **does not create HTTP requests**; it operates only on **header/body** payloads. Dart (client) and PHP (server) implement the same protocol.
+# otp_crypto
 
-> **Summary**  
-> - The IV is **not transmitted**. Both sides derive it as  
->   `iv = HMAC_SHA256(macKey, "iv" || u64be(window) || nonce)[:16]`  
-> - **Encrypt-then-MAC**: encrypt with `AES-256-CBC`, then MAC with `HMAC-SHA256`.  
-> - Keys are derived by HKDF-SHA256: `enc_key` (32B) + `mac_key` (32B).  
-> - Time window: `window = floor(epochSeconds / 30)` (default 30s).  
-> - Wire format:  
->   - Headers: `{ "version":1, "window":<int>, "nonce":"<b64_nonce>", "ciphertext":"<b64_ciphertext>" }`  
->   - Body: `"<b64_tag>"`
+A small crypto toolkit with:
+
+- **v1**: symmetric encryption utilities (legacy)
+- **v2 (PFS)**: a minimal **Perfect Forward Secrecy** session protocol for HTTP payload protection:
+  - X25519 (ephemeral ECDH) + HKDF-SHA256
+  - AEAD: ChaCha20-Poly1305 (default) or AES-256-GCM
+  - Vault Transit–friendly **Ed25519** server signatures
+  - **Replay protection** via `sid + seq` and optional sliding window
+  - **Endpoint binding** via canonical **AAD** (method/path/query/host)
+
+This repo focuses on *client-side mechanics* in Dart; server-side (PHP) is intended to mirror the same canonicalization and wire formats.
 
 ---
 
-## Table of Contents
+## Why this exists
 
-- [otp\_crypto (Dart)](#otp_crypto-dart)
-  - [Table of Contents](#table-of-contents)
-  - [Installation](#installation)
-  - [Architecture \& Layout](#architecture--layout)
-  - [Protocol Details](#protocol-details)
-  - [Usage (Dart)](#usage-dart)
-    - [Configuration (Singleton)](#configuration-singleton)
-    - [Encryption (Encryptor)](#encryption-encryptor)
-    - [Verify \& Decrypt (Decryptor)](#verify--decrypt-decryptor)
-    - [Wire Adapters (ApiClient)](#wire-adapters-apiclient)
-    - [Dio Integration Example](#dio-integration-example)
-  - [Error Handling](#error-handling)
-  - [Security Notes](#security-notes)
-  - [Testing / Validation](#testing--validation)
+TLS already gives you PFS. This library is for the cases where you still want **message-level security**:
+- payload protection at rest (logs, queues, proxies),
+- endpoint/method binding (a ciphertext can’t be replayed to a different route),
+- explicit replay rules at the application layer.
+
+---
+
+## Security model (v2)
+
+- **Handshake**
+  - Client generates ephemeral X25519 keypair.
+  - Server responds with ephemeral X25519 public key + server identity metadata.
+  - Server signs **SHA-256(transcript)** with **Ed25519** (Vault Transit “sign” output is supported).
+- **Key schedule**
+  - `shared = X25519(client_priv, server_pub)`
+  - `salt = SHA256(transcript_bytes)`
+  - `okm = HKDF(shared, salt, info = "<protocolId>/keys", len=44)`
+  - `aeadKey = okm[0..31]`, `nonceBase12 = okm[32..43]`
+- **Message protection**
+  - Per-message nonce is derived from `(nonceBase12 XOR u64be(seq) into last 8 bytes)`.
+  - AAD binds: `HTTP context + PfsHeader canonical JSON`.
+  - Replay checks: strict monotonic or sliding window.
 
 ---
 
 ## Installation
 
-`pubspec.yaml` is included. Example dependencies:
+Add to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  crypto: ^3.0.3
-  encrypt: ^5.0.1
-  meta: ^1.11.0
-
-dev_dependencies:
-  test: ^1.25.0
-  dio: ^5.4.0
-  lints: ^3.0.0
+  otp_crypto: ^<your-version>
 ````
 
-> Note: The library itself **does not** perform HTTP. The example app (if you choose to send requests) uses `dio`.
-
 ---
 
-## Architecture & Layout
+## Quickstart (v2 client)
 
-```
-lib/
-├─ otp_crypto/
-│  ├─ otp_crypto_config.dart   # Singleton config (v, masterKey, salt/info, windows)
-│  ├─ utils.dart               # b64, u64be, constant-time compare, helpers
-│  ├─ errors.dart              # safe error messages & exception types
-│  ├─ sha256_hmac.dart         # HMAC-SHA256 (pure Dart; SHA-256 digest via crypto)
-│  ├─ hkdf.dart                # HKDF-SHA256 (extract+expand)
-│  ├─ time_provider.dart       # SystemTimeProvider / AdjustableTimeProvider
-│  ├─ rand_nonce.dart          # 8-byte nonce generator (CSPRNG)
-│  ├─ iv_deriver.dart          # IV = HMAC(macKey,"iv"||u64be(w)||nonce)[:16]
-│  ├─ otp_cipher.dart          # AES-256-CBC + PKCS#7 (uses `encrypt`)
-│  ├─ tag_deriver.dart         # tag = HMAC(macKey,"tag"||u64be(w)||n||c)
-│  ├─ encryptor.dart           # high-level encryption (produces SecureMessage)
-│  └─ decryptor.dart           # verify + decrypt
-├─ http/
-│  └─ api_client.dart          # header/body adapters (no HTTP)
-└─ models/
-   └─ secure_message.dart      # wire model (headers/body)
-```
+### 1) Configure PFS
 
----
-
-## Protocol Details
-
-* **Version (`version`)**: `1`
-* **Time window (`window`)**: `floor(epochSeconds / 30)` (default `30`)
-* **Nonce (`Nonce`)**: 8 bytes, CSPRNG
-* **HKDF-SHA256**:
-
-  * PRK = HMAC(salt, masterKey)
-  * OKM (64B) = expand(PRK, info, 64) → `encKey` (first 32B) + `macKey` (next 32B)
-* **IV derivation**: `HMAC_SHA256(macKey, "iv" || u64be(w) || nonce)[:16]`
-* **Encryption**: AES-256-CBC + PKCS#7 (`encKey`, `iv`)
-* **MAC (EtM)**: `HMAC_SHA256(macKey, "tag" || u64be(w) || nonce || ciphertext)`
-* **Wire format**:
-
-  * Headers:
-
-    ```json
-    {
-      "version": 1,
-      "window": <int>,
-      "nonce": "<b64_nonce>",
-      "ciphertext": "<b64_ciphertext>"
-    }
-    ```
-  * Body: `"<b64_tag>"`
-
-> **Do not send IV.** Each side computes it with the same algorithm.
-
----
-
-## Usage (Dart)
-
-### Configuration (Singleton)
+You must provide a resolver for server identity public keys (and optionally pin keys).
 
 ```dart
-import 'dart:typed_data';
-import 'package:otp_crypto/otp_crypto/otp_crypto_config.dart';
-import 'package:otp_crypto/otp_crypto/time_provider.dart';
+import 'package:otp_crypto/otp_crypto.dart';
 
-void main() {
-  // At least 32 bytes (example only; store securely in production):
-  final masterKey = Uint8List.fromList(List<int>.generate(32, (i) => i));
-
-  OtpCryptoConfig.initialize(
-    masterKey: masterKey,
-    salt: null,                 // optional; recommended: protocol constant
-    info: null,                 // optional; recommended: "otp-v1"
-    protocolVersion: 1,
-    windowSeconds: 30,
-    verificationSkewWindows: 0, // acceptable ±N windows
-    timeProvider: SystemTimeProvider(),
-  );
-}
+final config = PfsConfig(
+  aead: PfsAead.chacha20Poly1305,
+  // kid (+ optional keyVersion) -> Ed25519 public key
+  resolveServerPublicKey: (kid, {int? keyVersion}) async {
+    // Fetch from config, cache, your API, etc.
+    // Return SimplePublicKey(bytes, type: KeyPairType.ed25519)
+    return null;
+  },
+  // Optional pinning (kid -> public key)
+  pinnedServerKeys: const {},
+  maxClockSkew: const Duration(seconds: 60),
+  handshakeMaxClockSkew: const Duration(seconds: 60),
+  replayWindowSize: 0, // 0 = strict monotonic, >0 = sliding window
+);
 ```
 
-### Encryption (Encryptor)
+### 2) Create ClientHello
 
 ```dart
-import 'dart:typed_data';
-import 'package:otp_crypto/otp_crypto/encryptor.dart';
-import 'package:otp_crypto/models/secure_message.dart';
+final hc = HandshakeClient(config);
 
-final enc = Encryptor();
-final plaintext = Uint8List.fromList('Hello secure world'.codeUnits);
-final SecureMessage msg = enc.protect(plaintext);
-// `msg` is ready to be serialized into headers/body
-```
-
-### Verify & Decrypt (Decryptor)
-
-```dart
-import 'dart:typed_data';
-import 'package:otp_crypto/otp_crypto/decryptor.dart';
-import 'package:otp_crypto/models/secure_message.dart';
-
-final dec = Decryptor();
-final Uint8List plain = dec.unprotect(msg);
-```
-
-### Wire Adapters (ApiClient)
-
-```dart
-import 'package:otp_crypto/http/api_client.dart';
-
-// Sender side:
-final wire = ApiClient.toWire(msg, extraHeaders: {'X-App-Id': 'myapp'});
-// wire.headers -> {"version","window","nonce","ciphertext",...}, wire.body -> "<b64_tag>"
-
-// Receiver side:
-final parsed = ApiClient.parseWire(headers: wire.headers, body: wire.body);
-// parsed -> SecureMessage; then call Decryptor.unprotect(parsed)
-```
-
-### Dio Integration Example
-
-> The library does not perform HTTP; the following is **application-level**.
-
-```dart
-import 'package:dio/dio.dart';
-import 'package:otp_crypto/http/api_client.dart';
-import 'package:otp_crypto/otp_crypto/encryptor.dart';
-import 'package:otp_crypto/otp_crypto/decryptor.dart';
-
-final dio = Dio(BaseOptions(baseUrl: 'https://api.example.com'));
-final enc = Encryptor();
-final dec = Decryptor();
-
-// 1) Build encrypted request
-final msg = enc.protect(Uint8List.fromList('{"q":"ping"}'.codeUnits));
-final wire = ApiClient.toWire(msg, extraHeaders: {'X-App-Id': 'demo'});
-
-// 2) Send (headers/body)
-final resp = await dio.post(
-  '/secure-endpoint',
-  options: Options(headers: wire.headers),
-  data: wire.body, // String (Base64 tag)
+final state = await hc.createClientHello(
+  expectServerIdentity: const ServerIdentityRef(
+    kid: 'pfs-server-id',
+    keyVersion: 1,
+    alg: ServerSigAlg.ed25519,
+  ),
 );
 
-// 3) Parse and decrypt the response
-final replyMsg = ApiClient.parseWire(
-  headers: Map<String, String>.from(resp.headers.map.map(
-    (k, v) => MapEntry(k, v.join(',')),
-  )),
-  body: resp.data is String ? resp.data as String : resp.data.toString(),
+final clientHelloBytes = state.encodeHello();
+// Send to server (HTTP body or whatever transport)
+```
+
+### 3) Process ServerHello → Session
+
+```dart
+// Receive from server:
+final serverHelloBytes = /* bytes from server */;
+final serverHello = ServerHello.decode(serverHelloBytes);
+
+// Verify signature + derive keys:
+final result = await hc.processServerHello(
+  state: state,
+  serverHello: serverHello,
 );
 
-final plain = dec.unprotect(replyMsg);
-print(String.fromCharCodes(plain));
+final session = PfsSession.fromHandshake(
+  config: config,
+  result: result,
+);
+```
+
+### 4) Protect / Unprotect HTTP payload
+
+```dart
+final http = const HttpContext(
+  method: 'POST',
+  path: '/api/v1/devices',
+  query: {'a': '1'},
+  // host: 'example.com', // optional binding
+);
+
+// Encrypt
+final pt = Uint8List.fromList(utf8.encode('hello'));
+final out = await session.protect(plaintext: pt, http: http);
+
+// Put `out.header.toWireHeaders()` into HTTP headers (or carry otherwise)
+// Put `out.envelope.encode()` as HTTP body.
+
+// Decrypt (on receiver side with same session keys)
+final bodyBytes = out.envelope.encode();
+final envelope = PfsEnvelope.decode(bodyBytes);
+
+final header = out.header; // or parse from wire headers: PfsHeader.fromWireHeaders(...)
+final decrypted = await session.unprotect(header: header, envelope: envelope, http: http);
 ```
 
 ---
 
-## Error Handling
+## Canonicalization (interop-critical)
 
-Generic, non-leaking messages:
+v2 uses **canonical JSON** for:
 
-* `Invalid message`
-* `Authentication failed`
-* `Decryption failed`
-* `Expired or not yet valid`
-* `Internal error`
+* `ClientHello.encode()`
+* Transcript hash inputs
+* `PfsHeader` canonical JSON (AAD)
+* HTTP context canonical JSON (AAD)
 
-See exception classes under `lib/otp_crypto/errors.dart`.
+Do **not** replace this with `jsonEncode()` or you will eventually break Dart↔PHP interop due to ordering/formatting differences.
 
----
+Canonical encoder lives in:
 
-## Security Notes
+* `lib/pfs/codec/canonical_json.dart`
 
-* **EtM**: never decrypt before MAC verification.
-* **No IV transmission**: IV is derived from `macKey`; protect `macKey` carefully.
-* **Replay**: within the 30s window, track seen nonces (e.g., LRU/cache) at higher layers.
-* **Clock sync**: adjust `verificationSkewWindows` if you must accept ± windows (e.g., `1` → `[w-1, w, w+1]`).
-* **Key management**: `masterKey` ≥ 32B; secure distribution/storage is mandatory.
-* **Error hygiene**: do not leak cryptographic internals.
-* **Constant-time compare**: use `constantTimeEquals` for tag checks.
+Rules (summary):
+
+* map keys are **string-only**, sorted lexicographically
+* no whitespace
+* doubles are rejected (avoid number formatting drift)
 
 ---
 
-## Testing / Validation
+## Vault Transit signature compatibility
 
-* **Interop**: messages produced in Dart should decrypt in PHP, and vice versa.
-* **Wrong key**: MAC/decryption must fail.
-* **Wrong window**: reject when outside tolerance.
-* **Nonce length**: reject if not exactly 8 bytes.
-* **Malformed Base64**: reject.
-* **Large payloads**: test padding and performance.
+`ServerHello.sig` can be either:
 
-> For full end-to-end samples, see the `example/` folder (to be added in this repo).
+* raw base64 signature, or
+* Vault style: `vault:v1:<base64>` (parser takes substring after last `:`)
+
+Helper:
+
+* `PfsSignature.parseVaultSignature(...)`
 
 ---
+
+## Testing
+
+Run:
+
+```bash
+dart test
+```
+
+Included tests lock down:
+
+* transcript hash determinism
+* signature verify flow
+* key schedule agreement
+* AAD canonicalization
+
+---
+
+## Production notes
+
+* Rotate sessions. Don’t run one session forever.
+* Enforce replay checks on the server too.
+* Treat all crypto errors uniformly at your API boundary (avoid oracle behavior).
+* Use HTTPS anyway; this is message-level defense-in-depth, not a TLS replacement.
+
+---
+
+## License
+
+MIT (or your preferred license).
+
+````
+
+---
+
+## `CHANGELOG.md`
+
+```md
+# Changelog
+All notable changes to this project will be documented in this file.
+
+The format is based on Keep a Changelog, and this project follows Semantic Versioning.
+
+## [Unreleased]
+
+### Added
+- v2/PFS module exports from `lib/otp_crypto.dart`.
+- Canonical JSON encoder for Dart↔PHP interoperability (`lib/pfs/codec/canonical_json.dart`).
+- PFS handshake pipeline: ClientHello, ServerHello, Transcript, KeySchedule, HandshakeClient.
+- Session layer with AEAD protect/unprotect, replay checks, and HTTP-bound AAD.
+- Vault Transit–compatible signature parsing (`vault:v1:<b64>`).
+- Test suite for canonicalization + handshake + message protection:
+  - `test/pfs_aad_test.dart`
+  - `test/pfs_handshake_test.dart`
+  - `test/pfs_message_test.dart`
+
+### Changed
+- Transcript/AAD/header canonicalization now uses deterministic canonical JSON (sorted keys) instead of relying on `jsonEncode()` insertion order.
+- HandshakeClient now derives keys via `KeySchedule` (single source of truth).
+- Session errors shifted toward unified error types (`PfsException`) for oracle-resistance.
+
+### Fixed
+- KeyPairData private key extraction compatibility: use `SimpleKeyPairData.bytes` where applicable.
+- ServerHello signature field now supports Vault string format parsing during decode.
+
+### Security
+- Deterministic canonicalization reduces cross-language signature/transcript mismatch risk.
+- Replay protections and endpoint binding are enforced via AAD and seq tracking.
+
+## [0.1.0]
+### Added
+- Initial v1 symmetric encryption utilities (legacy).

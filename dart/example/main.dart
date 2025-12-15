@@ -89,6 +89,8 @@ void main() async {
       // JWT will also inject std fields like 'alg','typ' automatically.
     },
   );
+
+  print('masterkey: ${base64Encode(masterKey)}');
   // Sign JWT (HS256 by default) with a key known to both client & server.
   // NOTE: This is separate from the protocol HMAC (which authenticates ciphertext).
   final token = jwt.sign(SecretKey(base64Encode(masterKey)));

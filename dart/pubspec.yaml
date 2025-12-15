@@ -13,9 +13,11 @@ environment:
 
 # Library dependencies (used by code under lib/)
 dependencies:
-  crypto: ^3.0.3           # SHA-256 digest
-  encrypt: ^5.0.1          # AES-256-CBC + PKCS#7
-  meta: ^1.11.0            # @immutable, etc.
+  crypto: ^3.0.3
+  encrypt: ^5.0.1
+  meta: ^1.11.0
+  cryptography: ^2.7.0
+           # @immutable, etc.
 
 # Dev-only deps for tests and the example app.
 # NOTE: The library itself does NOT perform HTTP; if you run the example
